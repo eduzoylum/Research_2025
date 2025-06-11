@@ -1,0 +1,54 @@
+import numpy as np
+from scipy.optimize import minimize
+from scipy.linalg import cholesky, solve_triangular
+from constrained_gpr import ConstrainedGaussianProcess
+
+class ConstrainedGPOptimization:
+    def __init__(self, constrained_gp: ConstrainedGaussianProcess, initial_params):
+        self.constrained_gp = constrained_gp
+        self.initial_params = initial_params
+
+    def negative_log_likelihood(self, params):
+        """
+        Compute the negative log likelihood (NLL) for given hyperparameters.
+        """
+        self.constrained_gp.kernel.set_params(params)
+        self.constrained_gp.fit(self.constrained_gp.x_train, self.constrained_gp.y_train)
+
+        K = self.constrained_gp.kernel(self.constrained_gp.basis.knots, self.constrained_gp.basis.knots) + 1e-6 * np.eye(self.constrained_gp.m)
+        L = cholesky(K, lower=True)
+        alpha = solve_triangular(L.T, solve_triangular(L, self.constrained_gp.y_train, lower=True))
+
+        nll = 0.5 * np.dot(self.constrained_gp.y_train, alpha) + np.sum(np.log(np.diagonal(L))) + 0.5 * len(self.constrained_gp.y_train) * np.log(2 * np.pi)
+        return nll
+
+    def optimize_hyperparameters(self):
+        """
+        Optimize the kernel hyperparameters using constrained maximum likelihood estimation.
+        """
+        result = minimize(self.negative_log_likelihood, self.initial_params, method='L-BFGS-B', bounds=[(1e-5, None), (1e-5, None)])
+        return result.x
+
+# Example usage
+if __name__ == "__main__":
+    # Define training data
+    X_train = np.linspace(0, 1, 20)
+    y_train = np.sin(2 * np.pi * X_train) + 0.1 * np.random.randn(20)
+
+    # Define constraints (e.g., enforcing monotonicity)
+    knots = np.linspace(0, 1, 10)
+    constraint_matrix = np.zeros((len(knots) - 2, len(knots)))
+    for i in range(len(knots) - 2):
+        constraint_matrix[i, i] = 1
+        constraint_matrix[i, i + 1] = -2
+        constraint_matrix[i, i + 2] = 1
+    lower_bound = np.zeros(len(knots) - 2)
+
+    # Initialize constrained GP
+    constrained_gp = ConstrainedGaussianProcess(num_of_knots=10, constraint_matrix=constraint_matrix, lower_bound=lower_bound)
+    constrained_gp.fit(X_train, y_train)
+
+    # Optimize hyperparameters
+    optimizer = ConstrainedGPOptimization(constrained_gp, initial_params=[0.33, 0.2])
+    optimal_params = optimizer.optimize_hyperparameters()
+    print("Optimal Hyperparameters:", optimal_params)
